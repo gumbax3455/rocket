@@ -4,12 +4,7 @@
 			"path": "../../../../../latein/gumbax3455.github.io"
 		},
 		{
-			"name": "rocket",
-			"path": "../../../.."
-		},
-		{
-			"name": "rocket_payload",
-			"path": ".."
+			"path": "../../.."
 		}
 	],
 	"settings": {}
