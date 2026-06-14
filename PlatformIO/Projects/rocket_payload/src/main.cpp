@@ -1,3 +1,8 @@
+// Add this at the absolute top of the Payload file (Line 1)
+extern "C" {
+  #include <user_interface.h>
+}
+
 #include "Arduino.h"
 #include "Wire.h"
 #include "Adafruit_BMP3XX.h"
@@ -20,7 +25,7 @@ enum FlightState { GROUND_PAD, ASCENT, APOGEE_MET };
 FlightState current_state = GROUND_PAD;
 
 // Broadcast MAC address sends telemetry to any listening Ground Station
-uint8_t groundStationMac[] = {0x5E, 0xCF, 0x7F, 0xD3, 0x4F, 0x21};
+uint8_t groundStationMac[] = {0x5C, 0xCF, 0x7F, 0xD3, 0x4F, 0x21};;
 
 // Fixed packed telemetry structure
 struct __attribute__((packed)) TelemetryPacket {
@@ -62,12 +67,26 @@ void setup() {
     deploymentServo.attach(SERVO_PIN, 800, 2600);
     deploymentServo.write(SERVO_LOCKED_ANGLE);
 
-    // ESP-NOW Radio Configurations
+// ... keep your serial, servo, and sensor initialization the same ...
+
+    // --- UPDATED WIFI / ESP-NOW CONFIGURATION ---
     WiFi.mode(WIFI_STA);
     WiFi.disconnect();
+    delay(10);
+
+    // Force the physical radio hardware onto Channel 1
+    wifi_promiscuous_enable(1);
+    wifi_set_channel(1);
+    wifi_promiscuous_enable(0);
+    delay(10);
+
     if (esp_now_init() != 0) { Serial.println("[!] ESP-NOW Init Failed"); while(1); }
     esp_now_set_self_role(ESP_NOW_ROLE_CONTROLLER);
+    
+    // Explicitly pair to the ground station on Channel 1
     esp_now_add_peer(groundStationMac, ESP_NOW_ROLE_SLAVE, 1, NULL, 0);
+
+    // ... keep the altimeter calibration loop the same ...
 
     Wire.begin(4, 5); 
     Wire.setClock(400000); 
