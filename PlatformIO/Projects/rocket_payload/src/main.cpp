@@ -3,12 +3,14 @@
 #include "Adafruit_BMP3XX.h"
 #include "SparkFun_BMI270_Arduino_Library.h"
 #include <Servo.h>
+#include <ESP8266WiFi.h>
+#include <espnow.h>
 
 Adafruit_BMP3XX bmp;
 BMI270 bmi;
 Servo deploymentServo;
 
-const int SERVO_PIN = 14;          // Pin D5 (GPIO 14)
+const int SERVO_PIN = 14; 
 #define SEALEVELPRESSURE_HPA (1013.25)
 
 const int SERVO_LOCKED_ANGLE = 0;    
@@ -16,6 +18,24 @@ const int SERVO_DEPLOY_ANGLE = 120;
 
 enum FlightState { GROUND_PAD, ASCENT, APOGEE_MET };
 FlightState current_state = GROUND_PAD;
+
+// Broadcast MAC address sends telemetry to any listening Ground Station
+uint8_t groundStationMac[] = {0x5E, 0xCF, 0x7F, 0xD3, 0x4F, 0x21};
+
+// Fixed packed telemetry structure
+struct __attribute__((packed)) TelemetryPacket {
+    uint8_t state;
+    float alt;
+    float maxAlt;
+    float accX;
+    float accY;
+    float accZ;
+    float pitch;
+    float roll;
+    float yaw;
+    uint8_t confidence;
+};
+TelemetryPacket telemetry;
 
 float groundAltitude = 0.0;
 float maxAltitude = -999.0;
@@ -30,28 +50,35 @@ uint32_t lastFusionTime = 0;
 uint32_t lastPrintTime = 0;
 
 const float LAUNCH_THRESHOLD_METERS = 0.5;   
-const float DESCENT_THRESHOLD_METERS = 0.8;  // !!!!!!
+const float DESCENT_THRESHOLD_METERS = 0.8;  
 const int REQUIRED_DESCENT_SAMPLES = 5;      
 const float TILT_THRESHOLD_DEGREES = 65.0;   
 
 void setup() {
     Serial.begin(115200);
-    delay(8000);
-    Serial.println("\n=== TERMINAL STANDALONE FLIGHT COMPUTER REVISION ===");
+    delay(1000);
+    Serial.println("\n=== PAYLOAD TRANSMITTER ACTIVE (FULL TELEMETRY LOGGING) ===");
 
     deploymentServo.attach(SERVO_PIN, 800, 2600);
     deploymentServo.write(SERVO_LOCKED_ANGLE);
 
+    // ESP-NOW Radio Configurations
+    WiFi.mode(WIFI_STA);
+    WiFi.disconnect();
+    if (esp_now_init() != 0) { Serial.println("[!] ESP-NOW Init Failed"); while(1); }
+    esp_now_set_self_role(ESP_NOW_ROLE_CONTROLLER);
+    esp_now_add_peer(groundStationMac, ESP_NOW_ROLE_SLAVE, 1, NULL, 0);
+
     Wire.begin(4, 5); 
     Wire.setClock(400000); 
 
-    if (!bmp.begin_I2C(0x77, &Wire)) { Serial.println("[!] BMP390 Error"); while(1); }
+    if (!bmp.begin_I2C(0x77, &Wire)) { Serial.println("[!] BMP390 Failure"); while(1); }
     bmp.setTemperatureOversampling(BMP3_OVERSAMPLING_4X);
     bmp.setPressureOversampling(BMP3_OVERSAMPLING_2X);
     bmp.setIIRFilterCoeff(BMP3_IIR_FILTER_COEFF_3);
     bmp.setOutputDataRate(BMP3_ODR_50_HZ);
 
-    if (bmi.beginI2C(0x68) != BMI2_OK) { Serial.println("[!] BMI270 Error"); while(1); }
+    if (bmi.beginI2C(0x68) != BMI2_OK) { Serial.println("[!] BMI270 Failure"); while(1); }
 
     float altSum = 0;
     for (int i = 0; i < 20; i++) {
@@ -62,12 +89,13 @@ void setup() {
     currentAltitude = groundAltitude;
     maxAltitude = groundAltitude;
 
-    Serial.println("[+] System Calibrated and Armed.");
+    Serial.println("[+] System Armed. Ready for Full Broadcast & Local Debug.");
 }
 
 void loop() {
     uint32_t now = millis();
 
+    // Override feature preserved
     if (Serial.available() > 0) {
         String inputCommand = Serial.readStringUntil('\n');
         inputCommand.trim();
@@ -132,24 +160,40 @@ void loop() {
                     break;
             }
 
+            // High-Performance Link Transmission & Full Logging Loop (Runs at 5Hz / every 200ms)
             if (now - lastPrintTime >= 200) {
                 lastPrintTime = now;
                 
-                Serial.print("State: ");
+                // 1. Pack the telemetry structure for radio transmission
+                telemetry.state = (uint8_t)current_state;
+                telemetry.alt = currentAltitude - groundAltitude;
+                telemetry.maxAlt = maxAltitude - groundAltitude;
+                telemetry.accX = ax;
+                telemetry.accY = ay;
+                telemetry.accZ = az;
+                telemetry.pitch = pitch;
+                telemetry.roll = roll;
+                telemetry.yaw = yaw;
+                telemetry.confidence = (current_state == APOGEE_MET) ? 100 : (descentSampleCount * 100) / REQUIRED_DESCENT_SAMPLES;
+
+                // 2. Transmit packet over the airwaves
+                esp_now_send(groundStationMac, (uint8_t *) &telemetry, sizeof(telemetry));
+
+                // 3. Complete Debug Print directly to payload's local USB terminal
+                Serial.print("TX | State: ");
                 if(current_state == GROUND_PAD) Serial.print("PAD    | ");
                 if(current_state == ASCENT)     Serial.print("ASCENT | ");
                 if(current_state == APOGEE_MET) Serial.print("DEPLOY | ");
 
-                Serial.print("Alt: "); Serial.print(currentAltitude - groundAltitude, 2); Serial.print("m | ");
-                Serial.print("Max: "); Serial.print(maxAltitude - groundAltitude, 2); Serial.print("m | ");
-                Serial.print("Acc: "); Serial.print(ax,1); Serial.print(","); Serial.print(ay,1); Serial.print(","); Serial.print(az,1); Serial.print(" m/s² | ");
-                Serial.print("Ori: P:"); Serial.print(pitch,0); Serial.print(" R:"); Serial.print(roll,0); Serial.print(" Y:"); Serial.print(yaw,0); Serial.print(" | ");
+                Serial.print("Alt: "); Serial.print(telemetry.alt, 2); Serial.print("m | ");
+                Serial.print("Max: "); Serial.print(telemetry.maxAlt, 2); Serial.print("m | ");
+                Serial.print("Acc: "); Serial.print(telemetry.accX, 1); Serial.print(","); Serial.print(telemetry.accY, 1); Serial.print(","); Serial.print(telemetry.accZ, 1); Serial.print(" m/s² | ");
+                Serial.print("Ori: P:"); Serial.print(telemetry.pitch, 0); Serial.print(" R:"); Serial.print(telemetry.roll, 0); Serial.print(" Y:"); Serial.print(telemetry.yaw, 0); Serial.print(" | ");
                 
-                int confidence = (descentSampleCount * 100) / REQUIRED_DESCENT_SAMPLES;
                 if (current_state == APOGEE_MET) {
                     Serial.println("Deploy: 100% -> [DEPLOYED]");
                 } else {
-                    Serial.print("Confidence: "); Serial.print(confidence); Serial.println("%");
+                    Serial.print("Confidence: "); Serial.print(telemetry.confidence); Serial.println("%");
                 }
             }
         }
