@@ -1,3 +1,7 @@
+// Add this at the absolute top of the Ground Station file (Line 1)
+extern "C" {
+  #include <user_interface.h>
+}
 #include "Arduino.h"
 #include <ESP8266WiFi.h>
 #include <espnow.h>
@@ -49,13 +53,25 @@ void onDataReceive(uint8_t * mac, uint8_t *incomingData, uint8_t len) {
 
 void setup() {
     Serial.begin(115200);
-    delay(8000);
+    delay(1000);
     Serial.println("\n=============================================");
     Serial.println("     GROUND STATION RECEIVER ONLINE         ");
     Serial.println("=============================================");
 
+    // --- UPDATED WIFI / ESP-NOW CONFIGURATION ---
     WiFi.mode(WIFI_STA);
     WiFi.disconnect();
+    delay(10);
+
+    // Force the physical radio hardware onto Channel 1
+    wifi_promiscuous_enable(1);
+    wifi_set_channel(1);
+    wifi_promiscuous_enable(0);
+    delay(10);
+
+    Serial.print("[INFO] Ground Station MAC Address is: ");
+    Serial.println(WiFi.macAddress()); 
+    Serial.println("=============================================");
 
     if (esp_now_init() != 0) {
         Serial.println("[!] ESP-NOW Ground Station Initialization Failed");
@@ -69,7 +85,5 @@ void setup() {
 }
 
 void loop() {
-    // The ground station is purely event-driven via interrupts. 
-    // No code is needed inside loop()!
     delay(100);
 }
