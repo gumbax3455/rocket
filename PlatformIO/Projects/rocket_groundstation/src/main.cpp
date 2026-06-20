@@ -5,66 +5,83 @@ extern "C" {
 #include <ESP8266WiFi.h>
 #include <espnow.h>
 
-// --- STATUS LED CONFIGURATION ---
-const int STATUS_LED_PIN = 2; // GPIO2 / Pin D4 (Onboard LED)
+const int STATUS_LED_PIN = 2; 
 #define LED_ON LOW
 #define LED_OFF HIGH
 
-struct __attribute__((packed)) TelemetryPacket {
+struct __attribute__((packed)) TelemetrySample {
     uint8_t state;
-    float alt;
-    float maxAlt;
-    float accX;
-    float accY;
-    float accZ;
-    float pitch;
-    float roll;
-    float yaw;
     uint8_t confidence;
+    float alt;
+    int16_t accX_scaled;
+    int16_t accY_scaled;
+    int16_t accZ_scaled;
+    int16_t pitch_scaled;
+    int16_t roll_scaled;
+    int16_t yaw_scaled;
 };
-TelemetryPacket incomingTelemetry;
+
+TelemetrySample receivedBundle[10];
 
 uint32_t lastPacketTime = 0;
 uint32_t lastLedToggle = 0;
 bool ledState = true;
 
-// Session baseline variables
 uint32_t sessionStartTime = 0;
 bool isSessionActive = false;
+float runningMaxAltitude = 0.0; // Automatically tracks peak apogee baseline locally
 
 void onDataReceive(uint8_t * mac, uint8_t *incomingData, uint8_t len) {
-    if (len == sizeof(incomingTelemetry)) {
-        memcpy(&incomingTelemetry, incomingData, sizeof(incomingTelemetry));
+    if (len == sizeof(receivedBundle)) {
+        memcpy(&receivedBundle, incomingData, sizeof(receivedBundle));
         uint32_t currentTime = millis();
         lastPacketTime = currentTime; 
         
-        // Locks the baseline once
         if (!isSessionActive) {
             sessionStartTime = currentTime;
             isSessionActive = true;
         }
 
-        // Calculate exact relative elapsed time since tracking began
         uint32_t relativeSessionTime = currentTime - sessionStartTime;
         
-        // CSV style data output
-        Serial.print(relativeSessionTime); Serial.print(",");
-        Serial.print(incomingTelemetry.state); Serial.print(",");
-        Serial.print(incomingTelemetry.alt, 2); Serial.print(",");
-        Serial.print(incomingTelemetry.maxAlt, 2); Serial.print(",");
-        Serial.print(incomingTelemetry.accX, 2); Serial.print(",");
-        Serial.print(incomingTelemetry.accY, 2); Serial.print(",");
-        Serial.print(incomingTelemetry.accZ, 2); Serial.print(",");
-        Serial.print(incomingTelemetry.pitch, 1); Serial.print(",");
-        Serial.print(incomingTelemetry.roll, 1); Serial.print(",");
-        Serial.print(incomingTelemetry.yaw, 1); Serial.print(",");
-        Serial.println(incomingTelemetry.confidence);
+        // --- UNBUNDLE AND PRINT THE 10 INDIVIDUAL DATA POINTS ---
+        for (int i = 0; i < 10; i++) {
+            // Reconstruct timeline mechanics: each data point is staggered back by 10ms increments
+            uint32_t calculatedSampleTime = relativeSessionTime - ((9 - i) * 10);
+
+            // Decompress integer transformations back into floating variables
+            float currentAlt = receivedBundle[i].alt;
+            if (currentAlt > runningMaxAltitude) {
+                runningMaxAltitude = currentAlt;
+            }
+
+            float ax = receivedBundle[i].accX_scaled / 100.0;
+            float ay = receivedBundle[i].accY_scaled / 100.0;
+            float az = receivedBundle[i].accZ_scaled / 100.0;
+            
+            float p  = receivedBundle[i].pitch_scaled / 10.0;
+            float r  = receivedBundle[i].roll_scaled / 10.0;
+            float y  = receivedBundle[i].yaw_scaled / 10.0;
+
+            // OUTPUT TO CSV
+            Serial.print(calculatedSampleTime); Serial.print(",");
+            Serial.print(receivedBundle[i].state); Serial.print(",");
+            Serial.print(currentAlt, 2); Serial.print(",");
+            Serial.print(runningMaxAltitude, 2); Serial.print(",");
+            Serial.print(ax, 2); Serial.print(",");
+            Serial.print(ay, 2); Serial.print(",");
+            Serial.print(az, 2); Serial.print(",");
+            Serial.print(p, 1); Serial.print(",");
+            Serial.print(r, 1); Serial.print(",");
+            Serial.print(y, 1); Serial.print(",");
+            Serial.println(receivedBundle[i].confidence);
+        }
     }
 }
+
 void setup() {
     Serial.begin(115200);
 
-    // Initialize Status LED as ON to indicate power
     pinMode(STATUS_LED_PIN, OUTPUT);
     digitalWrite(STATUS_LED_PIN, LED_ON);
 
@@ -78,27 +95,22 @@ void setup() {
     delay(10);
 
     if (esp_now_init() != 0) { while(1); }
-    
     esp_now_set_self_role(ESP_NOW_ROLE_SLAVE);
     esp_now_register_recv_cb(onDataReceive);
 }
 
-// status LED loop
 void loop() {
     uint32_t now = millis();
 
-    // Check if receiving data packets
+    // Pure Hardware Reset enforcement pattern
     if (now - lastPacketTime < 1000) {
-        // Active data streaming -> Blink
         if (now - lastLedToggle >= 500) {
             lastLedToggle = now;
             ledState = !ledState;
             digitalWrite(STATUS_LED_PIN, ledState ? LED_ON : LED_OFF);
         }
     } else {
-        // No data stream present -> Stay ON
         digitalWrite(STATUS_LED_PIN, LED_ON);
     }
-    
-    delay(20); // Small yielding break for core background tasks
+    delay(20); 
 }
