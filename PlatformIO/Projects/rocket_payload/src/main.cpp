@@ -20,11 +20,11 @@ const int SERVO_LOCKED_ANGLE = 0;
 const int SERVO_DEPLOY_ANGLE = 120;  
 
 // --- STATUS LED CONFIGURATION ---
-const int STATUS_LED_PIN = 2; // GPIO2 / Pin D4 (Onboard LED on most ESP8266 boards)
-// Note: ESP8266 onboard LEDs are usually active-LOW. 
+const int STATUS_LED_PIN = 2; // GPIO2 / Pin D4
 #define LED_ON LOW
 #define LED_OFF HIGH
 
+// flight status against accidental events
 enum FlightState { GROUND_PAD, ASCENT, APOGEE_MET };
 FlightState current_state = GROUND_PAD;
 
@@ -49,6 +49,7 @@ float maxAltitude = -999.0;
 float currentAltitude = 0.0; 
 int descentSampleCount = 0;
 
+// noise gates
 const float FILTER_WEIGHT = 0.98;  
 float pitch = 0.0, roll = 0.0, yaw = 0.0;
 
@@ -58,6 +59,7 @@ uint32_t lastPrintTime = 0;
 uint32_t lastLedToggle = 0;
 bool ledState = true;
 
+// more noise gates
 const float LAUNCH_ACCEL_THRESHOLD = 16.0;  
 const float DESCENT_THRESHOLD_METERS = 0.8;  
 const int REQUIRED_DESCENT_SAMPLES = 5;      
@@ -68,7 +70,7 @@ void setup() {
     delay(1000);
     Serial.println("\n=== PAYLOAD ACTIVE ===");
 
-    // Initialize Status LED as solid ON to indicate system has power
+    // Initialize Status LED as ON to indicate power
     pinMode(STATUS_LED_PIN, OUTPUT);
     digitalWrite(STATUS_LED_PIN, LED_ON);
 
@@ -203,7 +205,7 @@ void loop() {
                     digitalWrite(STATUS_LED_PIN, ledState ? LED_ON : LED_OFF);
                 }
 
-                // Local debug print kept for basic verification
+                // Local debug print for basic verification
                 Serial.print("TX | State: ");
                 Serial.print(current_state);
                 Serial.print(" | Alt: ");

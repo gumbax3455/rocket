@@ -28,13 +28,27 @@ uint32_t lastPacketTime = 0;
 uint32_t lastLedToggle = 0;
 bool ledState = true;
 
+// Session baseline variables
+uint32_t sessionStartTime = 0;
+bool isSessionActive = false;
+
 void onDataReceive(uint8_t * mac, uint8_t *incomingData, uint8_t len) {
     if (len == sizeof(incomingTelemetry)) {
         memcpy(&incomingTelemetry, incomingData, sizeof(incomingTelemetry));
-        lastPacketTime = millis(); // Refresh data window timer
+        uint32_t currentTime = millis();
+        lastPacketTime = currentTime; 
         
-        // CRITICAL: PURE CSV OUTPUT ONLY. No text labels allowed.
-        Serial.print(millis()); Serial.print(",");
+        // Locks the baseline once
+        if (!isSessionActive) {
+            sessionStartTime = currentTime;
+            isSessionActive = true;
+        }
+
+        // Calculate exact relative elapsed time since tracking began
+        uint32_t relativeSessionTime = currentTime - sessionStartTime;
+        
+        // CSV style data output
+        Serial.print(relativeSessionTime); Serial.print(",");
         Serial.print(incomingTelemetry.state); Serial.print(",");
         Serial.print(incomingTelemetry.alt, 2); Serial.print(",");
         Serial.print(incomingTelemetry.maxAlt, 2); Serial.print(",");
@@ -47,11 +61,10 @@ void onDataReceive(uint8_t * mac, uint8_t *incomingData, uint8_t len) {
         Serial.println(incomingTelemetry.confidence);
     }
 }
-
 void setup() {
     Serial.begin(115200);
 
-    // Initialize Status LED as solid ON to indicate power
+    // Initialize Status LED as ON to indicate power
     pinMode(STATUS_LED_PIN, OUTPUT);
     digitalWrite(STATUS_LED_PIN, LED_ON);
 
@@ -70,19 +83,20 @@ void setup() {
     esp_now_register_recv_cb(onDataReceive);
 }
 
+// status LED loop
 void loop() {
     uint32_t now = millis();
 
-    // Check if we are actively receiving data packets
+    // Check if receiving data packets
     if (now - lastPacketTime < 1000) {
-        // Active data streaming -> Blink at 500ms intervals
+        // Active data streaming -> Blink
         if (now - lastLedToggle >= 500) {
             lastLedToggle = now;
             ledState = !ledState;
             digitalWrite(STATUS_LED_PIN, ledState ? LED_ON : LED_OFF);
         }
     } else {
-        // No data stream present -> Stay solid ON (Power indicator mode)
+        // No data stream present -> Stay ON
         digitalWrite(STATUS_LED_PIN, LED_ON);
     }
     
